@@ -1,0 +1,235 @@
+openapi: 3.0.3
+info:
+  title: Rota Direct - Reservation Service (public widget API)
+  version: 0.1.0
+  description: |
+    Public API used by the booking widget.
+
+    Every `/v1/public/{hotelKey}/...` request belongs to exactly one hotel. The hotel key is
+    public (it is embedded in the widget script tag) and is a path parameter so that CORS
+    preflights can be answered per hotel (see ADR-0004).
+
+    All errors use one JSON shape: `{ "error": { "code", "message", "details"? } }`. Clients
+    should switch on `code`, which is stable; `message` is English and for developers.
+servers:
+  - url: http://localhost:3000
+tags:
+  - name: Availability
+  - name: Operations
+
+paths:
+  /v1/public/{hotelKey}/availability:
+    get:
+      tags: [Availability]
+      summary: Search bookable room types for a stay
+      description: |
+        Availability is computed night by night: a room type is offered only if it fits the party,
+        has an inventory row for every night, and has at least one free room on every night.
+        `remaining` is the minimum free rooms over the nights. The check-out date is not a night.
+        Children count toward room capacity. Dates are calendar dates in the hotel's time zone;
+        "today" is also evaluated in that zone.
+      parameters:
+        - $ref: '#/components/parameters/HotelKey'
+        - name: checkIn
+          in: query
+          required: true
+          schema: { type: string, format: date, example: '2026-11-01' }
+        - name: checkOut
+          in: query
+          required: true
+          schema: { type: string, format: date, example: '2026-11-04' }
+        - name: adults
+          in: query
+          required: true
+          description: Whole number, 1 to 10.
+          schema: { type: integer, minimum: 1, maximum: 10, example: 2 }
+        - name: children
+          in: query
+          required: false
+          description: Whole number, 0 to 10. Defaults to 0.
+          schema: { type: integer, minimum: 0, maximum: 10, default: 0 }
+        - name: Origin
+          in: header
+          required: false
+          description: |
+            Sent automatically by browsers. If present it must be on the hotel's allow-list,
+            otherwise the request is rejected with 403. Requests without it (curl, servers) pass.
+          schema: { type: string, example: 'https://www.lagosbeachhotel.example' }
+      responses:
+        '200':
+          description: Bookable room types, cheapest first. An empty list means nothing is available for these dates.
+          headers:
+            Cache-Control:
+              description: Always `no-store`; stock changes with every booking.
+              schema: { type: string, example: no-store }
+            Access-Control-Allow-Origin:
+              description: Present when `Origin` is on the hotel's allow-list.
+              schema: { type: string }
+            Vary:
+              description: Always includes `Origin`.
+              schema: { type: string, example: Origin }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AvailabilityResponse' }
+              example:
+                stay: { checkIn: '2026-11-01', checkOut: '2026-11-04', nights: 3, adults: 2, children: 0 }
+                roomTypes:
+                  - id: 7c5d6a3e-0b8e-4c53-9d7c-2f6f1c1f9a11
+                    code: standard
+                    name: { tr: Standart, en: Standard }
+                    maxGuests: 2
+                    nightlyPrice: { amountMinor: 320000, currency: TRY }
+                    totalPrice: { amountMinor: 960000, currency: TRY }
+                    remaining: 20
+        '400':
+          description: Malformed request (missing parameter, bad date format, non-numeric count). Code `INVALID_REQUEST`, with `details` listing the offending parameters.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '403':
+          description: '`ORIGIN_NOT_ALLOWED`: the browser origin is not on this hotel''s allow-list.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: '`HOTEL_NOT_FOUND`: unknown or malformed hotel key.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: |
+            Well-formed request that breaks a business rule. `code` is one of:
+            `CHECK_IN_IN_PAST`, `INVALID_DATE_RANGE`, `STAY_TOO_LONG` (max 30 nights),
+            `OUTSIDE_BOOKING_WINDOW` (stay must end within 365 days), `INVALID_GUEST_COUNT`,
+            `CAPACITY_EXCEEDED` (no room type in the hotel hosts that many guests).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: CAPACITY_EXCEEDED
+                  message: No room type in this hotel can host that many guests.
+                  details: { guests: 5, maxGuestsPerRoom: 4 }
+
+  /v1/public/{hotelKey}/{path}:
+    options:
+      tags: [Availability]
+      summary: CORS preflight (any path under a hotel)
+      description: |
+        Answered per hotel. 204 with `Access-Control-Allow-*` headers when the `Origin` is on the
+        hotel's allow-list; 403 otherwise; 404 for an unknown hotel key. The allowed request
+        headers include `Content-Type`, `Idempotency-Key` and `Accept-Language`.
+      parameters:
+        - $ref: '#/components/parameters/HotelKey'
+        - name: path
+          in: path
+          required: true
+          schema: { type: string }
+        - name: Origin
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        '204': { description: Preflight accepted. }
+        '403':
+          description: Origin not allowed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: Unknown hotel key.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /health/live:
+    get:
+      tags: [Operations]
+      summary: Liveness probe (process is up)
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string, example: ok } } }
+
+  /health/ready:
+    get:
+      tags: [Operations]
+      summary: Readiness probe (database reachable)
+      responses:
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string, example: ok } } }
+        '503':
+          description: Database unreachable
+          content:
+            application/json:
+              schema: { type: object, properties: { status: { type: string, example: unavailable } } }
+
+components:
+  parameters:
+    HotelKey:
+      name: hotelKey
+      in: path
+      required: true
+      description: Public hotel key (`data-hotel-key` of the widget script tag). Not a secret.
+      schema: { type: string, pattern: '^[A-Za-z0-9_-]{8,64}$', example: pk_lagos_beach_demo }
+
+  schemas:
+    Money:
+      type: object
+      required: [amountMinor, currency]
+      properties:
+        amountMinor:
+          type: integer
+          description: Integer minor units (kurus for TRY). 3.200 TRY is 320000.
+        currency: { type: string, example: TRY }
+
+    AvailabilityResponse:
+      type: object
+      required: [stay, roomTypes]
+      properties:
+        stay:
+          type: object
+          required: [checkIn, checkOut, nights, adults, children]
+          properties:
+            checkIn: { type: string, format: date }
+            checkOut: { type: string, format: date }
+            nights: { type: integer }
+            adults: { type: integer }
+            children: { type: integer }
+        roomTypes:
+          type: array
+          items:
+            type: object
+            required: [id, code, name, maxGuests, nightlyPrice, totalPrice, remaining]
+            properties:
+              id: { type: string, format: uuid }
+              code: { type: string, example: deluxe-sea-view }
+              name:
+                type: object
+                required: [tr, en]
+                properties:
+                  tr: { type: string }
+                  en: { type: string }
+              maxGuests: { type: integer }
+              nightlyPrice: { $ref: '#/components/schemas/Money' }
+              totalPrice: { $ref: '#/components/schemas/Money' }
+              remaining:
+                type: integer
+                description: Rooms free for the whole stay (minimum over the nights).
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string, example: CHECK_IN_IN_PAST }
+            message: { type: string }
+            details: {}
