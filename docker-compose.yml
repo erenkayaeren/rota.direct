@@ -1,0 +1,71 @@
+# Rota Direct - local stack.
+#   docker compose up --build                                   # start everything
+#   docker compose --profile test run --rm reservation-test     # run the test suite
+#
+# Startup order: postgres (healthy) -> reservation-bootstrap (migrate + seed, exits 0)
+#                -> reservation (health-checked)
+
+name: rota-direct
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rota}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rota_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-reservation}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # One-shot job: apply migrations, load demo hotels, extend the inventory horizon.
+  reservation-bootstrap:
+    build: &reservation-build
+      context: ./services/reservation
+      target: runtime
+    image: rota-direct/reservation:dev
+    command: ["node", "dist/cli/bootstrap.js"]
+    environment: &reservation-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-rota}:${POSTGRES_PASSWORD:-rota_dev_password}@postgres:5432/${POSTGRES_DB:-reservation}
+      SEED_DEMO_DATA: "true"
+      LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    healthcheck:
+      disable: true # the image health check targets the HTTP server, not this job
+
+  reservation:
+    build: *reservation-build
+    image: rota-direct/reservation:dev
+    environment: *reservation-env
+    ports:
+      - "127.0.0.1:${RESERVATION_PORT:-3000}:3000"
+    depends_on:
+      reservation-bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Test runner (integration tests create and drop their own databases).
+  reservation-test:
+    profiles: ["test"]
+    build:
+      context: ./services/reservation
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgres://${POSTGRES_USER:-rota}:${POSTGRES_PASSWORD:-rota_dev_password}@postgres:5432/postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
