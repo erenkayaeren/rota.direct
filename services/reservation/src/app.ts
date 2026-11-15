@@ -25,6 +25,10 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   app.setErrorHandler(errorHandler);
   app.setNotFoundHandler(notFoundHandler);
 
+  // Friendly answers for someone who opens the API in a browser.
+  app.get('/', async () => ({ service: 'rota-reservation', docs: 'docs/api/openapi.yaml', health: '/health/ready' }));
+  app.get('/favicon.ico', async (_request, reply) => reply.code(204).send());
+
   // Operational endpoints: not tenant-bound.
   app.get('/health/live', async () => ({ status: 'ok' }));
   app.get('/health/ready', async (request, reply) => {
