@@ -9,6 +9,8 @@ const envSchema = z.object({
   /** Load the two demo hotels from the case study on bootstrap. */
   SEED_DEMO_DATA: z.enum(['true', 'false']).default('false'),
   MIGRATIONS_DIR: z.string().min(1).default(path.resolve(process.cwd(), 'migrations')),
+  /** How long an availability answer is reused in memory (S6). 0 disables the cache. */
+  AVAILABILITY_CACHE_TTL_MS: z.coerce.number().int().min(0).max(300_000).default(10_000),
 });
 
 export interface Config {
@@ -18,6 +20,7 @@ export interface Config {
   logLevel: 'fatal' | 'error' | 'warn' | 'info' | 'debug' | 'trace' | 'silent';
   seedDemoData: boolean;
   migrationsDir: string;
+  availabilityCacheTtlMs: number;
 }
 
 /** Reads and validates environment variables once, at startup, failing fast with a clear message. */
@@ -37,6 +40,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: value.LOG_LEVEL,
     seedDemoData: value.SEED_DEMO_DATA === 'true',
     migrationsDir: value.MIGRATIONS_DIR,
+    availabilityCacheTtlMs: value.AVAILABILITY_CACHE_TTL_MS,
   };
 }
 

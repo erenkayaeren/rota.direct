@@ -9,7 +9,7 @@ const HORIZON_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 async function main(): Promise<void> {
   const config = loadConfig();
   const pool = createPool(config.databaseUrl);
-  const app = await buildApp({ pool, logger: { level: config.logLevel } });
+  const app = await buildApp({ pool, logger: { level: config.logLevel }, availabilityCacheTtlMs: config.availabilityCacheTtlMs });
 
   // Keep inventory rows materialised as days pass. Idempotent, so running it from every
   // replica is harmless.

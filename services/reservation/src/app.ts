@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
+import { CachedAvailability } from './modules/inventory/application/availability-cache.js';
 import { SearchAvailability } from './modules/inventory/application/search-availability.js';
 import { availabilityRoutes } from './modules/inventory/http/availability-routes.js';
 import { CancelReservation } from './modules/reservation/application/cancel-reservation.js';
@@ -17,6 +18,8 @@ import { systemClock, type Clock } from './shared/clock.js';
 export interface AppDependencies {
   pool: Pool;
   clock?: Clock;
+  /** Availability answers are reused for this long (S6, ADR-0009). 0 or unset = no server-side cache. */
+  availabilityCacheTtlMs?: number;
   logger?: boolean | { level: string };
 }
 
@@ -50,15 +53,18 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   const clock = deps.clock ?? systemClock;
   const inventoryReader = new PgInventoryReader(deps.pool);
   const unitOfWork = new PgUnitOfWork(deps.pool);
-  const searchAvailability = new SearchAvailability(inventoryReader, clock);
-  const createReservation = new CreateReservation(inventoryReader, unitOfWork, clock, randomBytes);
-  const cancelReservation = new CancelReservation(unitOfWork, clock);
+  const availability = new CachedAvailability(new SearchAvailability(inventoryReader, clock), clock, {
+    ttlMs: deps.availabilityCacheTtlMs ?? 0,
+  });
+  const invalidate = (hotelId: string): void => availability.invalidateHotel(hotelId);
+  const createReservation = new CreateReservation(inventoryReader, unitOfWork, clock, randomBytes, invalidate);
+  const cancelReservation = new CancelReservation(unitOfWork, clock, invalidate);
 
   // Public widget API. Everything under this prefix is bound to one hotel (see tenant-context.ts).
   await app.register(
     async (tenantScope: FastifyInstance) => {
       installTenantContext(tenantScope, { resolveHotel });
-      await tenantScope.register(availabilityRoutes, { searchAvailability });
+      await tenantScope.register(availabilityRoutes, { availability });
       await tenantScope.register(reservationRoutes, { createReservation, cancelReservation });
     },
     { prefix: '/v1/public/:hotelKey' },
