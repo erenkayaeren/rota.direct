@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <link rel="icon" href="data:,">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Düşman CSS testi - Rota Direct</title>
+  <style>
+    /* An aggressively styled hotel site: global resets, !important everywhere, the works.
+       The widget must look right anyway, and this page must not change because of the widget. */
+    * {
+      font-family: 'Courier New', monospace !important;
+      font-size: 22px !important;
+      font-weight: 900 !important;
+      font-style: italic !important;
+      letter-spacing: 4px !important;
+      text-transform: uppercase !important;
+      line-height: 2.4 !important;
+      color: #00ff00 !important;
+      text-shadow: 2px 2px 0 #f0f !important;
+    }
+    html { font-size: 40px; background: #200020; }
+    body { margin: 0; padding: 16px; background: #200020 !important; }
+    div, section, form, ul, li, p, h1, h2, h3, h4, header, footer, label, span, dl, dt, dd {
+      border: 3px dashed #ff3b3b !important;
+      background: #ffe600 !important;
+      padding: 12px !important;
+      margin: 10px !important;
+    }
+    button, input, a, select { display: none !important; visibility: hidden !important; }
+    input[type=checkbox] { display: none !important; }
+    .host-note { background: #003366 !important; border-color: #fff !important; }
+    .host-button { display: inline-block !important; visibility: visible !important; background: #ff00aa !important; padding: 8px 16px !important; }
+  </style>
+</head>
+<body>
+  <div class="host-note">HOST PAGE (hostile CSS). The widget below must be untouched by all of this.</div>
+  <button class="host-button">host button</button>
+
+  <script src="/widget.js" data-hotel-key="pk_lagos_beach_demo" data-api-base="http://localhost:3000" data-lang="en"></script>
+
+  <div class="host-note">HOST PAGE AFTER THE WIDGET (unchanged by the widget's CSS)</div>
+</body>
+</html>
