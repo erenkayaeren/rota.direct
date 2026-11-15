@@ -40,6 +40,10 @@ describe('decideCors', () => {
     expect(CORS_ALLOWED_HEADERS).toContain('Idempotency-Key');
   });
 
+  it('lets the widget read the Idempotent-Replayed response header', () => {
+    expect(decideCors(lagos, LAGOS_ORIGIN, false).headers['Access-Control-Expose-Headers']).toBe('Idempotent-Replayed');
+  });
+
   it('rejects a preflight from a disallowed origin too', () => {
     expect(decideCors(lagos, 'https://evil.example', true).action).toBe('reject');
   });

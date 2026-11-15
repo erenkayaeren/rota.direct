@@ -2,6 +2,8 @@ import { isOriginAllowed, type Hotel } from '../domain/hotel.js';
 
 export const CORS_ALLOWED_METHODS = 'GET, POST, OPTIONS';
 export const CORS_ALLOWED_HEADERS = 'Content-Type, Idempotency-Key, Accept-Language';
+/** Response headers browsers may expose to widget JavaScript (not visible by default under CORS). */
+export const CORS_EXPOSED_HEADERS = 'Idempotent-Replayed';
 export const CORS_PREFLIGHT_MAX_AGE_SECONDS = 600;
 
 export interface CorsDecision {
@@ -27,6 +29,7 @@ export function decideCors(hotel: Hotel, origin: string | undefined, preflight: 
   if (!isOriginAllowed(hotel, origin)) return { action: 'reject', headers };
 
   headers['Access-Control-Allow-Origin'] = origin;
+  headers['Access-Control-Expose-Headers'] = CORS_EXPOSED_HEADERS;
   if (preflight) {
     headers['Access-Control-Allow-Methods'] = CORS_ALLOWED_METHODS;
     headers['Access-Control-Allow-Headers'] = CORS_ALLOWED_HEADERS;

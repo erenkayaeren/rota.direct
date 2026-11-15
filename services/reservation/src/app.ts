@@ -1,7 +1,12 @@
+import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { SearchAvailability } from './modules/inventory/application/search-availability.js';
 import { availabilityRoutes } from './modules/inventory/http/availability-routes.js';
+import { CancelReservation } from './modules/reservation/application/cancel-reservation.js';
+import { CreateReservation } from './modules/reservation/application/create-reservation.js';
+import { reservationRoutes } from './modules/reservation/http/reservation-routes.js';
+import { PgUnitOfWork } from './modules/reservation/infra/pg-unit-of-work.js';
 import { PgInventoryReader } from './modules/inventory/infra/pg-inventory-reader.js';
 import { ResolveHotel } from './modules/tenancy/application/resolve-hotel.js';
 import { PgHotelRepository } from './modules/tenancy/infra/pg-hotel-repository.js';
@@ -42,16 +47,19 @@ export async function buildApp(deps: AppDependencies): Promise<FastifyInstance> 
   });
 
   const resolveHotel = new ResolveHotel(new PgHotelRepository(deps.pool));
-  const searchAvailability = new SearchAvailability(
-    new PgInventoryReader(deps.pool),
-    deps.clock ?? systemClock,
-  );
+  const clock = deps.clock ?? systemClock;
+  const inventoryReader = new PgInventoryReader(deps.pool);
+  const unitOfWork = new PgUnitOfWork(deps.pool);
+  const searchAvailability = new SearchAvailability(inventoryReader, clock);
+  const createReservation = new CreateReservation(inventoryReader, unitOfWork, clock, randomBytes);
+  const cancelReservation = new CancelReservation(unitOfWork, clock);
 
   // Public widget API. Everything under this prefix is bound to one hotel (see tenant-context.ts).
   await app.register(
     async (tenantScope: FastifyInstance) => {
       installTenantContext(tenantScope, { resolveHotel });
       await tenantScope.register(availabilityRoutes, { searchAvailability });
+      await tenantScope.register(reservationRoutes, { createReservation, cancelReservation });
     },
     { prefix: '/v1/public/:hotelKey' },
   );
