@@ -89,10 +89,10 @@ describe('migrator', () => {
 
   it('applies migrations once and is idempotent', async () => {
     const first = await migrate(db.pool, MIGRATIONS_DIR);
-    expect(first.applied).toEqual(['001_init']);
+    expect(first.applied).toEqual(['001_init', '002_reservations']);
     const second = await migrate(db.pool, MIGRATIONS_DIR);
     expect(second.applied).toHaveLength(0);
-    expect(second.alreadyApplied).toEqual(['001_init']);
+    expect(second.alreadyApplied).toEqual(['001_init', '002_reservations']);
   });
 
   it('refuses to continue when an already-applied migration file was edited', async () => {
