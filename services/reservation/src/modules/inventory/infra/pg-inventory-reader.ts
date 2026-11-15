@@ -20,6 +20,16 @@ interface InventoryRow {
   booked: number;
 }
 
+function toRoomType(row: RoomTypeRow): RoomType {
+  return {
+    id: row.id,
+    code: row.code,
+    name: { tr: row.name_tr, en: row.name_en },
+    maxGuests: row.max_guests,
+    nightlyPriceMinor: row.base_price_minor,
+  };
+}
+
 /**
  * Postgres adapter for the inventory read side. Every statement filters on hotel_id: a tenant
  * can only ever see its own rows, whatever the caller passes in the other arguments.
@@ -35,13 +45,18 @@ export class PgInventoryReader implements InventoryReader {
        ORDER BY base_price_minor, code`,
       [hotelId],
     );
-    return result.rows.map((row) => ({
-      id: row.id,
-      code: row.code,
-      name: { tr: row.name_tr, en: row.name_en },
-      maxGuests: row.max_guests,
-      nightlyPriceMinor: row.base_price_minor,
-    }));
+    return result.rows.map(toRoomType);
+  }
+
+  async findRoomType(hotelId: HotelId, roomTypeId: string): Promise<RoomType | null> {
+    const result = await this.db.query<RoomTypeRow>(
+      `SELECT id, code, name_tr, name_en, max_guests, base_price_minor
+       FROM room_types
+       WHERE hotel_id = $1 AND id = $2`,
+      [hotelId, roomTypeId],
+    );
+    const row = result.rows[0];
+    return row === undefined ? null : toRoomType(row);
   }
 
   async listNightlyInventory(

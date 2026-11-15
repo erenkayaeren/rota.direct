@@ -18,6 +18,10 @@ class FakeInventory implements InventoryReader {
     return [standard];
   }
 
+  async findRoomType(): Promise<RoomType | null> {
+    return standard;
+  }
+
   async listNightlyInventory(hotelId: string, from: string, toExclusive: string): Promise<NightlyInventory[]> {
     this.calls.push({ hotelId, from, toExclusive });
     return ['2026-11-01', '2026-11-02'].map((date) => ({

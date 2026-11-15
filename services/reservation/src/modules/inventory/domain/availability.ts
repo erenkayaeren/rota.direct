@@ -27,6 +27,11 @@ export interface RoomTypeAvailability {
   readonly totalPriceMinor: number;
 }
 
+/** Price of a whole stay in minor units. One place to change when price rules (weekend rates) arrive. */
+export function stayTotalPriceMinor(roomType: RoomType, stay: StaySearch): number {
+  return roomType.nightlyPriceMinor * stay.nights;
+}
+
 /**
  * M5 - availability of every room type for a stay, computed night by night.
  *
@@ -91,7 +96,7 @@ export function computeAvailability(
       roomType,
       remaining,
       nightlyPriceMinor: roomType.nightlyPriceMinor,
-      totalPriceMinor: roomType.nightlyPriceMinor * stay.nights,
+      totalPriceMinor: stayTotalPriceMinor(roomType, stay),
     });
   }
 
