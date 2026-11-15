@@ -20,7 +20,7 @@ declare module 'fastify' {
  * custom header values, so only the URL tells the server which hotel's allow-list to apply.
  */
 export function installTenantContext(scope: FastifyInstance, deps: { resolveHotel: ResolveHotel }): void {
-  scope.decorateRequest('hotel', null);
+  scope.decorateRequest('hotel', null as never);
 
   scope.addHook('onRequest', async (request, reply) => {
     const { hotelKey } = request.params as { hotelKey: string };
