@@ -1,13 +1,24 @@
 # Rota Direct - local stack.
 #   docker compose up --build                                   # start everything
-#   docker compose --profile test run --rm reservation-test     # run the test suite
+#   docker compose --profile test run --rm reservation-test     # reservation tests (also: crm-test, pms-test)
 #
-# Startup order: postgres (healthy) -> reservation-bootstrap (migrate + seed, exits 0)
-#                -> reservation (health-checked)
+# Startup order:
+#   postgres (healthy) -> reservation-bootstrap (migrate + seed, exits 0) -> reservation (HTTP)
+#                                                                         -> reservation-relay (outbox -> RabbitMQ)
+#   crm-postgres (healthy) -> crm-bootstrap (migrate + demo staff, exits 0) -> crm (HTTP + event consumer)
+#   pms-mock (fake external PMS) -> pms-notifier (PMS + mail consumers, retry + dead-letter)
+#   reservation-relay starts last of the backend: after crm and pms-notifier consume their queues
+#   widget (nginx: widget.js + demo hotel pages)
+#
+# Ports (all bound to 127.0.0.1):
+#   3000 reservation API   3100 CRM panel + API   3200 fake PMS   8080 widget demo   15672 RabbitMQ UI
 
 name: rota-direct
 
+x-rabbit-url: &amqp-url amqp://${RABBITMQ_USER:-rota}:${RABBITMQ_PASSWORD:-rota_dev_password}@rabbitmq:5672
+
 services:
+  # ------------------------------------------------------------------ infrastructure
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -26,6 +37,42 @@ services:
       retries: 10
       start_period: 5s
 
+  # The CRM owns its own database: it never reads the reservation database (ADR-0001, ADR-0007).
+  crm-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${CRM_POSTGRES_USER:-crm}
+      POSTGRES_PASSWORD: ${CRM_POSTGRES_PASSWORD:-crm_dev_password}
+      POSTGRES_DB: ${CRM_POSTGRES_DB:-crm}
+    volumes:
+      - crmdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-rota}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-rota_dev_password}
+    ports:
+      - "127.0.0.1:${RABBITMQ_PORT:-5672}:5672"
+      - "127.0.0.1:${RABBITMQ_UI_PORT:-15672}:15672"
+    volumes:
+      - rabbitmqdata:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ------------------------------------------------------------------ reservation service
   # One-shot job: apply migrations, load demo hotels, extend the inventory horizon.
   reservation-bootstrap:
     build: &reservation-build
@@ -55,7 +102,124 @@ services:
         condition: service_completed_successfully
     restart: unless-stopped
 
-  # Test runner (integration tests create and drop their own databases).
+  # Moves committed outbox rows to RabbitMQ (ADR-0006). Same image, different command.
+  reservation-relay:
+    build: *reservation-build
+    image: rota-direct/reservation:dev
+    command: ["node", "dist/cli/relay.js"]
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-rota}:${POSTGRES_PASSWORD:-rota_dev_password}@postgres:5432/${POSTGRES_DB:-reservation}
+      AMQP_URL: *amqp-url
+      HEALTH_PORT: "3001"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3001/health/ready"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+    depends_on:
+      reservation-bootstrap:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+      # An event published before a consumer has declared its queue would reach nobody. The relay
+      # (also `mandatory` publishing, ADR-0006) therefore starts only after the consumers are up.
+      crm:
+        condition: service_healthy
+      pms-notifier:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ CRM service
+  crm-bootstrap:
+    build: &crm-build
+      context: ./services/crm
+      target: runtime
+    image: rota-direct/crm:dev
+    command: ["node", "dist/cli/bootstrap.js"]
+    environment: &crm-env
+      DATABASE_URL: postgres://${CRM_POSTGRES_USER:-crm}:${CRM_POSTGRES_PASSWORD:-crm_dev_password}@crm-postgres:5432/${CRM_POSTGRES_DB:-crm}
+      SEED_DEMO_DATA: "true" # demo staff tokens (see README); never in production
+    depends_on:
+      crm-postgres:
+        condition: service_healthy
+    restart: "no"
+    healthcheck:
+      disable: true
+
+  crm:
+    build: *crm-build
+    image: rota-direct/crm:dev
+    environment:
+      <<: *crm-env
+      AMQP_URL: *amqp-url
+      LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:${CRM_PORT:-3100}:3100"
+    healthcheck:
+      # healthy = HTTP up AND the event queue is declared and consumed
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3100/health/consumer"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+    depends_on:
+      crm-bootstrap:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ PMS
+  pms-mock:
+    build: &pms-build
+      context: ./services/pms-mock
+      target: runtime
+    image: rota-direct/pms-mock:dev
+    environment:
+      PMS_API_KEY: ${PMS_API_KEY:-pms-demo-key}
+      PMS_FAILURE_MODE: ${PMS_FAILURE_MODE:-ok} # ok | down | flaky; also changeable at runtime via /admin/failure-mode
+    ports:
+      - "127.0.0.1:${PMS_PORT:-3200}:3200"
+    restart: unless-stopped
+
+  pms-notifier:
+    build: *pms-build
+    image: rota-direct/pms-mock:dev
+    command: ["node", "dist/worker.js"]
+    environment:
+      AMQP_URL: *amqp-url
+      PMS_BASE_URL: http://pms-mock:3200
+      PMS_API_KEY: ${PMS_API_KEY:-pms-demo-key}
+      # Pause before retry 1, 2, 3 ...; after the last one the message is parked in <queue>.dead
+      CONSUMER_RETRY_DELAYS_MS: ${PMS_RETRY_DELAYS_MS:-2000,10000,30000,60000,300000}
+      HEALTH_PORT: "3201"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3201/health/ready"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+    depends_on:
+      pms-mock:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ widget + demo hotel sites
+  widget:
+    build:
+      context: ./widget
+    image: rota-direct/widget:dev
+    ports:
+      - "127.0.0.1:${WIDGET_PORT:-8080}:8080"
+    depends_on:
+      - reservation
+    restart: unless-stopped
+
+  # ------------------------------------------------------------------ test runners
+  # Integration tests create and drop their own databases, so they only need a server to connect to.
   reservation-test:
     profiles: ["test"]
     build:
@@ -63,9 +227,40 @@ services:
       target: test
     environment:
       TEST_DATABASE_URL: postgres://${POSTGRES_USER:-rota}:${POSTGRES_PASSWORD:-rota_dev_password}@postgres:5432/postgres
+      TEST_AMQP_URL: *amqp-url
     depends_on:
       postgres:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  crm-test:
+    profiles: ["test"]
+    build:
+      context: ./services/crm
+      target: test
+    environment:
+      TEST_DATABASE_URL: postgres://${CRM_POSTGRES_USER:-crm}:${CRM_POSTGRES_PASSWORD:-crm_dev_password}@crm-postgres:5432/postgres
+      TEST_AMQP_URL: *amqp-url
+    depends_on:
+      crm-postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+
+  pms-test:
+    profiles: ["test"]
+    build:
+      context: ./services/pms-mock
+      target: test
+
+  widget-test:
+    profiles: ["test"]
+    build:
+      context: ./widget
+      target: test
 
 volumes:
   pgdata:
+  crmdata:
+  rabbitmqdata:
