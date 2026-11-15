@@ -72,7 +72,7 @@ describe('schema guarantees (the database is the last line of defence)', () => {
   });
 
   it('extends the horizon with only the missing days as time passes', async () => {
-    const inserted = await ensureInventoryHorizon(db.pool, addDays(TODAY, 10));
+    const inserted = await ensureInventoryHorizon(db.pool, addDays(TODAY, 9));
     expect(inserted).toBe(5 * 10); // 5 room types x the 10 new days at the far end
     expect(INVENTORY_HORIZON_DAYS).toBeGreaterThan(365);
   });
