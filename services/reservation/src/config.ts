@@ -39,3 +39,39 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     migrationsDir: value.MIGRATIONS_DIR,
   };
 }
+
+const relayEnvSchema = z.object({
+  DATABASE_URL: z.string().min(1),
+  AMQP_URL: z.string().min(1),
+  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
+  RELAY_POLL_INTERVAL_MS: z.coerce.number().int().min(10).default(500),
+  RELAY_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(100),
+  HEALTH_PORT: z.coerce.number().int().min(1).max(65535).default(3001),
+});
+
+export interface RelayConfig {
+  databaseUrl: string;
+  amqpUrl: string;
+  pollIntervalMs: number;
+  batchSize: number;
+  healthPort: number;
+}
+
+/** Settings of the outbox relay process (`dist/cli/relay.js`). */
+export function loadRelayConfig(env: NodeJS.ProcessEnv = process.env): RelayConfig {
+  const parsed = relayEnvSchema.safeParse(env);
+  if (!parsed.success) {
+    const problems = parsed.error.issues
+      .map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`)
+      .join('; ');
+    throw new Error(`Invalid configuration: ${problems}`);
+  }
+  const value = parsed.data;
+  return {
+    databaseUrl: value.DATABASE_URL,
+    amqpUrl: value.AMQP_URL,
+    pollIntervalMs: value.RELAY_POLL_INTERVAL_MS,
+    batchSize: value.RELAY_BATCH_SIZE,
+    healthPort: value.HEALTH_PORT,
+  };
+}
