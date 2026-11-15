@@ -33,7 +33,7 @@ function serverUrl(): string {
  * With `prepare: true` (default) it is migrated, seeded with the demo hotels and given the
  * same inventory horizon production has; with `prepare: false` it is left empty.
  */
-export async function createTestDatabase(options: { prepare?: boolean } = {}): Promise<TestDatabase> {
+export async function createTestDatabase(options: { prepare?: boolean; poolSize?: number } = {}): Promise<TestDatabase> {
   const prepare = options.prepare ?? true;
   const admin = createPool(serverUrl(), 1);
   const name = `rota_test_${process.pid}_${randomBytes(4).toString('hex')}`;
@@ -43,6 +43,9 @@ export async function createTestDatabase(options: { prepare?: boolean } = {}): P
 
   let pool: Pool | undefined;
   const drop = async (): Promise<void> => {
+    // Closing sockets race with DROP ... FORCE; the resulting idle-client errors are expected noise.
+    pool?.removeAllListeners('error');
+    pool?.on('error', () => {});
     await pool?.end();
     try {
       await admin.query(`DROP DATABASE IF EXISTS "${name}" WITH (FORCE)`);
@@ -53,7 +56,7 @@ export async function createTestDatabase(options: { prepare?: boolean } = {}): P
 
   try {
     await admin.query(`CREATE DATABASE "${name}"`);
-    pool = createPool(url.toString(), 5);
+    pool = createPool(url.toString(), options.poolSize ?? 5);
     if (prepare) {
       await migrate(pool, MIGRATIONS_DIR);
       await seedDemoData(pool);
