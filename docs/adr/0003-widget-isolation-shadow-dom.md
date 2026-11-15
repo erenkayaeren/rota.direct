@@ -1,6 +1,6 @@
 # ADR-0003: Widget izolasyonu: Shadow DOM
 
-- **Durum:** Kabul edildi.
+- **Durum:** Kabul edildi ve uygulandı (`widget/`). Doğrulama aşağıda.
 - **İlgili maddeler:** M1, S4, B5
 
 ## Bağlam
@@ -32,4 +32,6 @@ Widget bir **custom element** (`<rota-booking-widget>`) olarak, **Shadow DOM** i
 - (+) Boyutlandırma doğal (iframe'in aksine içerik host sayfa akışında).
 - (−) `mode: 'open'` shadow root'a host'un JS'i erişebilir: bu **stil** izolasyonudur, güvenlik sınırı değildir. Widget'ta gizli bilgi olmadığı (hotel key herkese açık) için kabul edilebilir.
 - (−) Modal/overlay ve odak yönetimi host sayfa üzerinde ayrıca ele alınmalı; `z-index` savaşı için widget kendi katmanını açar.
-- Doğrulama: agresif global CSS'e sahip bir "düşman" test sayfasında widget'ın bozulmadığı ve sayfanın widget'tan etkilenmediği gösterilecek.
+- **Doğrulama:** `widget/demo/hostile.html` sayfası her öğeye `!important` ile font, renk, harf aralığı, büyük harf, kenarlık, arka plan uygular ve `button`/`input`/`label`'ı gizler. Gerçek Chrome'da (Playwright ile) ölçüldü: widget içindeki buton `16px` sistem fontu, `normal` harf aralığı, `none` text-transform ve kendi marka rengiyle çizilir; host sayfanın pembe butonu ve lacivert notları widget yüklendikten sonra da aynıdır; `document.head`'e widget stili eklenmemiştir. jsdom'da ise yalnızca yapısal özellikler test edilir (stil shadow root'ta, light DOM'a düğüm sızmaz), çünkü jsdom stil kapsamını gerçek tarayıcı gibi uygulamaz.
+- **Uygulamada öğrenilen:** `:host { all: initial }` yalnızca host elementin kendi özelliklerini sıfırlar; host'a uygulanan `!important` kuralları (ör. `* { letter-spacing: 4px !important }`) **kalıtılan** özellikler olarak shadow içine akar. Bu yüzden shadow içindeki kök düğüme de `all: initial` verilir ve font/renk açıkça yeniden tanımlanır.
+- Bundle boyutu (B5): `widget.js` 45,6 kB, **16,5 kB gzip** (Preact dahil, tek dosya).

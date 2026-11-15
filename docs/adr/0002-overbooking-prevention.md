@@ -1,6 +1,6 @@
 # ADR-0002: Overbooking önleme: koşullu atomik UPDATE + CHECK kısıtı
 
-- **Durum:** Kabul edildi.
+- **Durum:** Kabul edildi ve uygulandı. Şema ve `CHECK` kısıtı, rezervasyon/iptal use case'leri ve eşzamanlılık testleri teslim edildi (`PgInventoryStock`, `test/integration/concurrency.test.ts`).
 - **İlgili maddeler:** M5, M6, M8
 
 ## Bağlam
@@ -45,5 +45,10 @@ Neden doğru: Postgres `UPDATE` sırasında satırı kilitler. Aynı satırı g�
 ## Sonuçlar
 
 - (+) Basit, hızlı ve veritabanı seviyesinde kanıtlanabilir; son savunma `CHECK`.
-- (−) Aynı satırlara yazan rezervasyonlar sıraya girer (kısa süreli bekleme). Çakışan tarih aralıkları farklı sırada kilitlenirse deadlock (`40P01`) teorik olarak mümkündür; tek ifade ve indeks sırası bunu pratikte önler, yine de sınırlı retry eklenecek.
-- Doğrulama: 1 oda kalmışken N=20 paralel istek → tam 1 başarılı, 19 `SOLD_OUT`, `booked = total`.
+- (−) Aynı satırlara yazan rezervasyonlar sıraya girer (kısa süreli bekleme). Çakışan tarih aralıkları farklı sırada kilitlenirse deadlock (`40P01`) teorik olarak mümkündür; tek ifade ve indeks sırası bunu pratikte önler, yine de `withTransaction` bu durumda (`40P01`, `40001`) işlemi baştan, en fazla 4 kez dener; transaction yalnızca veritabanına dokunduğu için tekrar çalıştırmak güvenlidir.
+- **Doğrulama:**
+  - 1 oda kalmışken 15 paralel istek → tam 1 `201`, 14 `409 SOLD_OUT`, `booked = total`, tek rezervasyon satırı.
+  - 5 odalı tipe 25 paralel istek → tam 5 `201`.
+  - Üst üste binen 40-60 rastgele aralık → yalnızca `201`/`409`; her gece için `booked` = o geceyi kapsayan onaylı rezervasyon sayısı ve `≤ total` (kısmi konaklama yok).
+  - Aynı rezervasyonu 6 paralel iptal → 1 başarı, 5 `409`; odalar bir kez geri açılır.
+  - **Negatif kontrol:** `AND booked < total` koşulu kaldırıldığında bu testler başarısız olur; yani testler gerçekten bu koşulu ölçüyor.

@@ -19,7 +19,7 @@ Kritik kısıt: tarayıcı, özel header içeren (ör. `Idempotency-Key`) istekl
   - `Origin` header'ı yoksa (curl, sunucu-sunucu) → geçer. CORS bir kimlik doğrulama değildir; anahtar zaten herkese açıktır. CORS, ziyaretçilerin tarayıcılarını korur.
 - Eşleşme birebir: joker yok, sonek/önek eşleşmesi yok (`evil-lagos…` geçemez). İzin listesi veritabanında (`hotels.allowed_origins`) olduğu için domain eklemek deploy gerektirmez; yazılırken normalize edilip doğrulanır.
 - Veri izolasyonu iki katmanlı: (1) her repository sorgusu `hotel_id` ile filtreler; (2) bileşik yabancı anahtar `inventory(hotel_id, room_type_id) → room_types(hotel_id, id)` bir otelin satırının başka otelin oda tipine bağlanmasını **veritabanında** imkânsız kılar.
-- CRM uçları JWT ister; `hotel_id` token claim'inden gelir, istemciden alınmaz.
+- CRM uçları token ister ve `hotel_id` token'dan gelir, istemciden alınmaz (opak bearer token, bkz. [ADR-0010](0010-crm-staff-access-and-panel-security.md)).
 
 ## Alternatifler
 
