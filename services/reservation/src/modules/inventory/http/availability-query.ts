@@ -1,13 +1,8 @@
 import { z } from 'zod';
-import { parseLocalDate, type LocalDate } from '../../../shared/local-date.js';
+import { localDateSchema } from '../../../platform/http/schemas.js';
 import type { StaySearchInput } from '../domain/stay-search.js';
 
-const dateParam = z
-  .string()
-  .refine((value) => parseLocalDate(value) !== null, {
-    message: 'must be a valid date in YYYY-MM-DD format',
-  })
-  .transform((value) => value as LocalDate);
+const dateParam = localDateSchema;
 
 // Digits only: rejects "", "1.5", "-1", "1e1" instead of silently coercing them.
 const countParam = z

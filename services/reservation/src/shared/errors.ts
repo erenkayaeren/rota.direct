@@ -3,7 +3,7 @@
  * `code` (the widget maps codes to Turkish/English copy) and a `kind`; the HTTP layer
  * decides which status code a kind becomes. Domain code never mentions HTTP.
  */
-export type DomainErrorKind = 'rule_violation' | 'not_found' | 'forbidden';
+export type DomainErrorKind = 'rule_violation' | 'not_found' | 'forbidden' | 'conflict';
 
 export class DomainError extends Error {
   readonly code: string;

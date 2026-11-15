@@ -16,6 +16,7 @@ const STATUS_BY_KIND: Record<DomainErrorKind, number> = {
   rule_violation: 422,
   not_found: 404,
   forbidden: 403,
+  conflict: 409,
 };
 
 function clientErrorStatus(error: unknown): number | null {

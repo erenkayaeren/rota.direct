@@ -12,6 +12,7 @@ describe('toHttpError', () => {
 
     expect(toHttpError(new DomainError('HOTEL_NOT_FOUND', 'x', 'not_found')).status).toBe(404);
     expect(toHttpError(new DomainError('ORIGIN_NOT_ALLOWED', 'x', 'forbidden')).status).toBe(403);
+    expect(toHttpError(new DomainError('SOLD_OUT', 'x', 'conflict')).status).toBe(409);
   });
 
   it('omits details when a domain error has none', () => {
