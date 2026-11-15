@@ -15,6 +15,7 @@ servers:
   - url: http://localhost:3000
 tags:
   - name: Availability
+  - name: Reservations
   - name: Operations
 
 paths:
@@ -62,6 +63,11 @@ paths:
             Cache-Control:
               description: Always `no-store`; stock changes with every booking.
               schema: { type: string, example: no-store }
+            X-Cache:
+              description: |
+                `HIT` / `MISS` / `OFF`: whether this answer came from the server's short-lived availability
+                cache (ADR-0009). Browsers still never cache it. A booking never consults the cache.
+              schema: { type: string, enum: [HIT, MISS, 'OFF'] }
             Access-Control-Allow-Origin:
               description: Present when `Origin` is on the hotel's allow-list.
               schema: { type: string }
@@ -110,6 +116,99 @@ paths:
                   code: CAPACITY_EXCEEDED
                   message: No room type in this hotel can host that many guests.
                   details: { guests: 5, maxGuestsPerRoom: 4 }
+
+  /v1/public/{hotelKey}/reservations:
+    post:
+      tags: [Reservations]
+      summary: Create a reservation (M6, M7)
+      description: |
+        Takes one room of the room type on every night in [checkIn, checkOut) and creates a
+        CONFIRMED reservation, atomically: if any night has no free room nothing is booked
+        (`409 SOLD_OUT`). Safe to retry with the same `Idempotency-Key`: a finished request is
+        answered with the stored response (same body, `Idempotent-Replayed: true`). The same key
+        with a different request is `422 IDEMPOTENCY_KEY_REUSED`. A failed attempt (e.g. SOLD_OUT)
+        stores nothing, so the key may be reused.
+      parameters:
+        - $ref: '#/components/parameters/HotelKey'
+        - name: Idempotency-Key
+          in: header
+          required: true
+          description: 16-128 characters from `A-Za-z0-9_.:-`; a UUID is recommended. One key per booking intent.
+          schema: { type: string, example: 7c0f6c0e-5b0f-4a43-9d7e-1f4b6a0c2d11 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateReservationRequest' }
+      responses:
+        '201':
+          description: Reservation created (or replayed; see `Idempotent-Replayed`).
+          headers:
+            Idempotent-Replayed:
+              description: '`true` when this is the stored answer to an earlier request with the same key.'
+              schema: { type: string, enum: ['true'] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservationResponse' }
+        '400':
+          description: Malformed request (bad JSON, unknown field, wrong type, missing or malformed Idempotency-Key).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '403':
+          description: Origin not on this hotel's allow-list.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '404':
+          description: Unknown hotel key, or `ROOM_TYPE_NOT_FOUND` (also for another hotel's room type).
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: "`SOLD_OUT`: at least one night has no free room. Nothing was booked."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '422':
+          description: |
+            Business rule violated. Codes: `KVKK_CONSENT_REQUIRED`, `IDEMPOTENCY_KEY_REUSED`,
+            `CAPACITY_EXCEEDED`, `INVALID_GUEST_COUNT`, `INVALID_EMAIL`, `INVALID_PHONE`,
+            `INVALID_GUEST_NAME`, `CHECK_IN_IN_PAST`, `INVALID_DATE_RANGE`, `STAY_TOO_LONG`,
+            `OUTSIDE_BOOKING_WINDOW`.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+
+  /v1/public/{hotelKey}/reservations/{code}/cancel:
+    post:
+      tags: [Reservations]
+      summary: Cancel a reservation and release its rooms (M8)
+      description: |
+        The guest proves ownership with the booking code plus the booking email (case-insensitive).
+        A wrong email, an unknown code and another hotel's code all answer the same `404`.
+        Cancelling twice is `409 INVALID_STATE_TRANSITION`.
+      parameters:
+        - $ref: '#/components/parameters/HotelKey'
+        - name: code
+          in: path
+          required: true
+          schema: { type: string, example: RT-7K3MQ9XA }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              additionalProperties: false
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200':
+          description: Cancelled.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservationResponse' }
+        '400':
+          description: Malformed request.
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '404':
+          description: "`RESERVATION_NOT_FOUND` (or unknown hotel key)."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+        '409':
+          description: "`INVALID_STATE_TRANSITION`: the reservation is not in a state that can be cancelled."
+          content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
 
   /v1/public/{hotelKey}/{path}:
     options:
@@ -221,6 +320,83 @@ components:
               remaining:
                 type: integer
                 description: Rooms free for the whole stay (minimum over the nights).
+
+    CreateReservationRequest:
+      type: object
+      additionalProperties: false
+      required: [roomTypeId, checkIn, checkOut, adults, guest, consents]
+      properties:
+        roomTypeId: { type: string, format: uuid }
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        adults: { type: integer, minimum: 1, maximum: 10 }
+        children: { type: integer, minimum: 0, maximum: 10, default: 0 }
+        guest:
+          type: object
+          additionalProperties: false
+          required: [firstName, lastName, email, phone]
+          properties:
+            firstName: { type: string }
+            lastName: { type: string }
+            email: { type: string, format: email }
+            phone:
+              type: string
+              description: Turkish formats accepted (`0532 123 45 67`); other countries with `+`. Stored as E.164.
+        consents:
+          type: object
+          additionalProperties: false
+          required: [kvkk]
+          properties:
+            kvkk:
+              type: boolean
+              description: KVKK information notice acknowledged. Must be true.
+            marketing:
+              type: boolean
+              default: false
+              description: Optional permission for marketing messages. Never pre-ticked.
+
+    Reservation:
+      type: object
+      required: [code, status, roomType, checkIn, checkOut, nights, adults, children, totalPriceMinor, currency, guest, marketingConsent, createdAt, cancelledAt]
+      properties:
+        code: { type: string, example: RT-7K3MQ9XA }
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, CHECKED_IN, CHECKED_OUT, CANCELLED, NO_SHOW]
+        roomType:
+          type: object
+          required: [id, code, name]
+          properties:
+            id: { type: string, format: uuid }
+            code: { type: string }
+            name:
+              type: object
+              properties:
+                tr: { type: string }
+                en: { type: string }
+        checkIn: { type: string, format: date }
+        checkOut: { type: string, format: date }
+        nights: { type: integer }
+        adults: { type: integer }
+        children: { type: integer }
+        totalPriceMinor: { type: integer, description: Minor units (kurus). }
+        currency: { type: string, example: TRY }
+        guest:
+          type: object
+          properties:
+            firstName: { type: string }
+            lastName: { type: string }
+            email: { type: string }
+            phone: { type: string, example: '+905321234567' }
+        marketingConsent: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        cancelledAt: { type: string, format: date-time, nullable: true }
+
+    ReservationResponse:
+      type: object
+      required: [reservation]
+      properties:
+        reservation: { $ref: '#/components/schemas/Reservation' }
 
     Error:
       type: object

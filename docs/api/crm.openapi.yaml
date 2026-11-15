@@ -1,0 +1,277 @@
+openapi: 3.0.3
+info:
+  title: Rota Direct CRM API
+  version: 0.1.0
+  description: |
+    Staff-facing API of the guest CRM (the panel at `/` uses it). Authenticated with an opaque bearer
+    token that identifies the staff user AND their hotel: a user can only ever see their own hotel's
+    guests (ADR-0010). The CRM learns about guests only from reservation events (ADR-0007).
+    Error body everywhere: `{ "error": { "code", "message", "details"? } }`.
+servers:
+  - url: http://localhost:3100
+security:
+  - staffToken: []
+tags:
+  - name: Guests
+  - name: Operations
+
+paths:
+  /api/v1/me:
+    get:
+      tags: [Guests]
+      summary: The signed-in staff user and their hotel
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: { type: string, example: Lagos Resepsiyon }
+                  hotel:
+                    type: object
+                    properties:
+                      key: { type: string, example: pk_lagos_beach_demo }
+                      name: { type: string, nullable: true, description: Null until the hotel's first reservation event arrived. }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /api/v1/guests:
+    get:
+      tags: [Guests]
+      summary: Search and page through the hotel's guests
+      parameters:
+        - name: q
+          in: query
+          description: Matches name, email, phone (digits only, national leading 0 ignored) or a reservation code. `%` and `_` are literal.
+          schema: { type: string, maxLength: 100 }
+        - name: tag
+          in: query
+          schema: { type: string }
+        - name: marketing
+          in: query
+          description: Filter by marketing consent.
+          schema: { type: string, enum: ['true', 'false'] }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [recent, name, spend], default: recent }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: A page of guests.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, page, pageSize, total]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/GuestSummary' } }
+                  page: { type: integer }
+                  pageSize: { type: integer }
+                  total: { type: integer, description: Matching guests over all pages. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422': { $ref: '#/components/responses/RuleViolation' }
+
+  /api/v1/guests/{id}:
+    get:
+      tags: [Guests]
+      summary: Guest profile with reservations, notes, tags and possible duplicates
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: The profile.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GuestDetail' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404':
+          description: "`GUEST_NOT_FOUND`: unknown id, or a guest of another hotel (indistinguishable)."
+
+  /api/v1/guests/{id}/notes:
+    post:
+      tags: [Guests]
+      summary: Add a note (attributed to the staff user)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              additionalProperties: false
+              properties:
+                body: { type: string, minLength: 1, maxLength: 2000 }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Note' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { description: "`GUEST_NOT_FOUND`" }
+        '422': { $ref: '#/components/responses/RuleViolation' }
+
+  /api/v1/guests/{id}/tags:
+    put:
+      tags: [Guests]
+      summary: Replace the guest's whole tag set
+      description: Tags are lower-cased; spaces become `-`; letters (incl. Turkish), digits and `-`, 1-30 characters; at most 20 per guest.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tags]
+              additionalProperties: false
+              properties:
+                tags: { type: array, items: { type: string }, example: [vip, sadık-misafir] }
+      responses:
+        '200':
+          description: The saved (normalized, de-duplicated, sorted) tags.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tags: { type: array, items: { type: string } }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '404': { description: "`GUEST_NOT_FOUND`" }
+        '422': { $ref: '#/components/responses/RuleViolation' }
+
+  /health/live:
+    get:
+      tags: [Operations]
+      security: []
+      summary: Process is up
+      responses:
+        '200': { description: OK }
+  /health/ready:
+    get:
+      tags: [Operations]
+      security: []
+      summary: Database reachable (also reports the event consumer's state)
+      responses:
+        '200': { description: "`{ status: ok, consumer: connected | reconnecting | disabled }`" }
+        '503': { description: Database unreachable. }
+  /health/consumer:
+    get:
+      tags: [Operations]
+      security: []
+      summary: The reservation-event queue is declared and consumed (used by Compose ordering)
+      responses:
+        '200': { description: Connected (or consumption disabled). }
+        '503': { description: Reconnecting to the broker. }
+
+components:
+  securitySchemes:
+    staffToken:
+      type: http
+      scheme: bearer
+      description: Opaque staff token. Demo tokens are in the README (loaded only with SEED_DEMO_DATA=true).
+  responses:
+    Unauthenticated:
+      description: "`UNAUTHENTICATED`: missing or unknown token. `WWW-Authenticate: Bearer`."
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    BadRequest:
+      description: "`INVALID_REQUEST`: malformed query, body or id."
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+    RuleViolation:
+      description: "`INVALID_TAG`, `TOO_MANY_TAGS`, `INVALID_NOTE`."
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}
+    Stats:
+      type: object
+      description: Computed from non-cancelled reservations only.
+      properties:
+        reservations: { type: integer }
+        cancelled: { type: integer }
+        nights: { type: integer }
+        spentMinor: { type: integer, description: Minor units (kurus). }
+        currency: { type: string, nullable: true }
+        lastCheckIn: { type: string, format: date, nullable: true }
+    GuestSummary:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        firstName: { type: string }
+        lastName: { type: string }
+        email: { type: string }
+        phone: { type: string }
+        marketingConsent: { type: boolean }
+        tags: { type: array, items: { type: string } }
+        stats: { $ref: '#/components/schemas/Stats' }
+        lastSeenAt: { type: string, format: date-time }
+    Note:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        body: { type: string }
+        author: { type: string }
+        createdAt: { type: string, format: date-time }
+    GuestDetail:
+      allOf:
+        - $ref: '#/components/schemas/GuestSummary'
+        - type: object
+          properties:
+            kvkkAcceptedAt: { type: string, format: date-time }
+            marketingConsentedAt: { type: string, format: date-time, nullable: true }
+            createdAt: { type: string, format: date-time }
+            reservations:
+              type: array
+              items:
+                type: object
+                properties:
+                  code: { type: string }
+                  status: { type: string }
+                  version: { type: integer }
+                  roomType:
+                    type: object
+                    properties:
+                      code: { type: string }
+                      name: { type: object, properties: { tr: { type: string }, en: { type: string } } }
+                  checkIn: { type: string, format: date }
+                  checkOut: { type: string, format: date }
+                  nights: { type: integer }
+                  adults: { type: integer }
+                  children: { type: integer }
+                  totalPriceMinor: { type: integer }
+                  currency: { type: string }
+                  bookedAt: { type: string, format: date-time }
+                  cancelledAt: { type: string, format: date-time, nullable: true }
+            notes: { type: array, items: { $ref: '#/components/schemas/Note' } }
+            possibleDuplicates:
+              type: array
+              description: Other guests of this hotel with the same phone number. A hint only; never merged automatically.
+              items:
+                type: object
+                properties:
+                  id: { type: string, format: uuid }
+                  firstName: { type: string }
+                  lastName: { type: string }
+                  email: { type: string }
