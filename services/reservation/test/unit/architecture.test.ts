@@ -3,7 +3,9 @@
  *   - domain code is pure (no framework, no database driver, no outer layers);
  *   - application code depends on ports, never on adapters or the HTTP framework;
  *   - the inventory module may use tenancy's domain types and nothing else of tenancy;
- *   - tenancy never depends on inventory.
+ *   - tenancy never depends on inventory or reservation;
+ *   - inventory never depends on reservation;
+ *   - reservation uses inventory's domain/application/infra and tenancy's domain, never their HTTP layers.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -89,6 +91,31 @@ describe('architecture boundaries', () => {
   it('tenancy does not depend on inventory', () => {
     const bad = offenders(
       (edge) => edge.from.startsWith('modules/tenancy/') && edge.local && edge.to.startsWith('modules/inventory/'),
+    );
+    expect(bad).toEqual([]);
+  });
+
+  it('tenancy does not depend on reservation', () => {
+    const bad = offenders(
+      (edge) => edge.from.startsWith('modules/tenancy/') && edge.local && edge.to.startsWith('modules/reservation/'),
+    );
+    expect(bad).toEqual([]);
+  });
+
+  it('inventory does not depend on reservation', () => {
+    const bad = offenders(
+      (edge) => edge.from.startsWith('modules/inventory/') && edge.local && edge.to.startsWith('modules/reservation/'),
+    );
+    expect(bad).toEqual([]);
+  });
+
+  it("reservation reaches into other modules only through tenancy's domain and inventory's domain, ports and adapters", () => {
+    const bad = offenders(
+      (edge) =>
+        edge.from.startsWith('modules/reservation/') &&
+        edge.local &&
+        ((edge.to.startsWith('modules/tenancy/') && !edge.to.startsWith('modules/tenancy/domain/')) ||
+          edge.to.startsWith('modules/inventory/http/')),
     );
     expect(bad).toEqual([]);
   });
